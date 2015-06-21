@@ -1,0 +1,174 @@
+---
+title: "Human Activity Recognition Project"
+author: "PS"
+date: "19 June 2015"
+output: html_document
+---
+
+# Executive Summary
+
+This Project aims to predict how well a group of participants performed a Weight-Lifting Exercise, by application of a Machine Learning Algorithm on data captured by sensors while they performed the exercises. This Project is a part of the Predictive Machine Learning class on Coursera.
+
+##Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: (http://groupware.les.inf.puc-rio.br/har) (see the section on the Weight Lifting Exercise Dataset).
+
+### Dataset
+
+The data files used in this project can be obtained from:
+
+(https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv)
+and,
+(https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv)
+
+### Libraries
+
+The following libraries were used in this Project.
+
+```{r, message=FALSE, }
+library(caret)
+library(randomForest)
+library(corrplot)
+```
+
+## Data Preprocessing
+
+The data was placed in the working directory and loaded into R. The data contained a lot of NA's as well as blanks. The missing and blank values were changed to NA's while loading .
+
+```{r}
+# Read in the data from pml-training.csv treating blanks as NA's (helps cleaning later)
+pml_data_in <- read.csv("pml-training.csv", na.strings= c("NA",""," "), header=TRUE)
+set.seed(1234)
+```
+
+Then the data was cleaned by removing the NA's, as well as the bookkeeping columns like Name, Id, window, etc.
+
+```{r}
+# Remove all cols that have NA's 
+pml_data <- pml_data_in[,!sapply(pml_data_in,function(x) any(is.na(x)))]
+
+# Ignore first 7 cols (Id, Name, window,etc.)
+pml_data <- pml_data[8:length(pml_data)]
+```
+
+## Splitting for Validation
+
+The cleaned data was then split into two sets in 70:30 ratio, one for training and the other for validation. The validation set was then left untouched, in order to produce an unbiased error estimate after constructing the model. The data set being sufficiently large, we do not require repeated cross-validation over the training set.
+
+
+```{r}
+# Split in 70:30 ratio for training & validation
+indexSplit <- createDataPartition(y=pml_data$classe,p=0.7,list=FALSE)
+pml_train_data <- pml_data[indexSplit,]
+pml_test_data <-  pml_data[-indexSplit,]
+
+```
+
+
+## Choice of Training method
+
+The data set is unbalanced with respect to data of various classes. Moreover, it is quite large. Hence Random Forest should be a suitable method for building a model on it.
+
+```{r, echo=FALSE}
+plot(pml_data$classe)
+```
+
+## Predictor Variable selection
+
+A trial model was constructed on a small sample of training data (10%) and all predictor variables using Random Forest. 18 predictor variables chosen according to *Variable Importance* (over a number of such trials) for the final model.
+
+```{r}
+
+# Create a small sample of training data
+pml_samp <- pml_train_data[createDataPartition(y=pml_train_data$classe,p=0.2,list=F),]
+
+# Create Random Forest Model on dataset
+rf_samp <- randomForest(classe ~., method="rf", data=pml_samp, importance=TRUE)
+print (rf_samp)
+
+# See how well the Model performs
+res_samp <- predict(rf_samp,newdata=pml_train_data)
+confusionMatrix(pml_train_data$classe, res_samp)
+
+# Variable Importance to choose predictor variables for the final model
+vrs <- varImp(rf_samp)
+
+# Subset the data selecting the specific variable columns only
+rws <- c(rownames(vrs)[1:18],"classe")
+pml_train <- pml_train_data[,dput(rws)]
+pml_test <- pml_test_data[,dput(rws)]  
+
+```
+
+Variable Importance Plot
+
+```{r, echo=FALSE}
+varImpPlot(rf_samp,main="Variable Importance Plot")
+```
+
+
+The correlation plot shows correlation between chosen predictor variables. The 18 chosen predictors have satisafactorily low correlation to be used in the final rf model. 
+
+```{r}
+# Find correlations between the chosen 18 predictor variables
+corrs <- cor(pml_train[,-19])
+
+# Plot the correlations
+corrplot(corrs,order="FPC",method="circle",tl.cex=0.4,tl.col=rgb(0,0,0))
+```
+
+
+## Training the Final Model
+
+As the Random Forest method by default uses oob(out-of-bag) cross-validation while training itself, thus we do not need to do extra cross-validation on the training set and can directly train the final model.
+
+```{r}
+
+# Train final Random Forest Model on entire dataset
+rfModel <- train(classe ~.,method="rf",data=pml_train)
+print (rfModel$finalModel)
+
+# Test the In-Sample Error
+in_samp <- predict(rfModel,newdata=pml_train)
+confusionMatrix(pml_train$classe,in_samp)
+```
+
+
+### Expected Error on Cross-Validation
+
+Cross-Validation with the hold out set created initially should give an error near the error rate for the training set. Greater variation may indicate that the model is overfitting the training data too much.
+
+## Validation on Hold-out Set
+
+Then the trained model was tested with the hold-out Validation data subset created earlier. This shows that a good accuracy, close to the expected value was achieved by the model.
+
+```{r}
+# Out of sample error on hold-out set (validation)
+testResults <- predict(rfModel,newdata=pml_test)
+confusionMatrix(pml_test$classe,testResults)
+```
+
+## Generating Files for Assignment Submission
+
+```{r}
+# Function to write to text files
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+# Load, clean Testing data, predict & write results to text files
+test2 <- read.csv("pml-testing.csv", header=T, na.strings=c("NA",""," "))
+test2 <- test2[,!sapply(test2,function(x) any(is.na(x)))]
+test2 <- test2[,8:length(test2)]
+assgn_preds <- predict(rfModel,newdata=test2)
+pml_write_files(assgn_preds)
+```
+
+### Conclusion
+
+Thus, very good accuracy was achieved using these techniques. However, a real-world scenario may require more optimised or regularized model.
+
